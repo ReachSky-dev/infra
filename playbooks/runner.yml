@@ -47,26 +47,59 @@
       when: runner_token is not defined or runner_token | length == 0
 
     # ── Wersja runnera ────────────────────────────────────────────────────────
-    - name: Pobierz najnowszą wersję runnera z GitHub API
+    # Jedno żądanie API — dla "latest" i dla przypiętej wersji.
+    # Odpowiedź zawiera też pole body z opisem wydania (używane do hasha SHA-256).
+    - name: Pobierz dane wydania z GitHub API
       ansible.builtin.uri:
-        url: https://api.github.com/repos/actions/runner/releases/latest
+        url: >-
+          {{ 'https://api.github.com/repos/actions/runner/releases/latest'
+             if runner_version == 'latest'
+             else 'https://api.github.com/repos/actions/runner/releases/tags/v' + runner_version }}
         return_content: true
         headers:
           Accept: application/vnd.github+json
-      register: _latest_release
+      register: _release
       changed_when: false
-      when: runner_version == 'latest'
 
     - name: Ustaw docelową wersję runnera
       ansible.builtin.set_fact:
         _resolved_version: >-
-          {{ (_latest_release.json.tag_name | regex_replace('^v', ''))
+          {{ (_release.json.tag_name | regex_replace('^v', ''))
              if runner_version == 'latest'
              else runner_version }}
 
     - name: Pokaż wersję runnera do instalacji
       ansible.builtin.debug:
         msg: "runner_version={{ _resolved_version }}{{ ' (z GitHub API)' if runner_version == 'latest' else ' (przypięta)' }}"
+
+    # ── Idempotentność — sprawdź zainstalowaną wersję ─────────────────────────
+    # Marker .installed-version jest zapisywany po każdej udanej instalacji.
+    # Dzięki niemu kolejne uruchomienia playbooka są szybkie (bez pobierania).
+    # Sprawdzamy wersję, nie obecność run.sh — run.sh istnieje przy każdej
+    # wersji i nie pozwala wykryć, czy zainstalowana wersja to właściwa.
+    - name: Sprawdź zainstalowaną wersję runnera
+      ansible.builtin.slurp:
+        src: "{{ runner_dir }}/.installed-version"
+      register: _installed_ver_raw
+      failed_when: false
+
+    - name: Ustaw flagę potrzeby (re)instalacji
+      ansible.builtin.set_fact:
+        _installed_version: >-
+          {{ (_installed_ver_raw.content | b64decode | trim)
+             if _installed_ver_raw is not failed
+             else '' }}
+        _needs_install: >-
+          {{ (_installed_ver_raw.content | b64decode | trim) != _resolved_version
+             if _installed_ver_raw is not failed
+             else true }}
+
+    - name: Pokaż stan instalacji
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Zainstalowana wersja ' + _installed_version + ' — aktualna, brak zmian.'
+             if not _needs_install | bool
+             else 'Wymagana instalacja: ' + (_installed_version | default('brak', true)) + ' → ' + _resolved_version }}
 
     # ── Zależności systemowe ──────────────────────────────────────────────────
     - name: Zainstaluj zależności runnera
@@ -104,11 +137,6 @@
         validate: "visudo -cf %s"
 
     # ── Pobierz i zweryfikuj archiwum ─────────────────────────────────────────
-    - name: Sprawdź czy runner już pobrany
-      ansible.builtin.stat:
-        path: "{{ runner_dir }}/run.sh"
-      register: _runner_bin
-
     - name: Utwórz katalog runnera
       ansible.builtin.file:
         path: "{{ runner_dir }}"
@@ -117,29 +145,33 @@
         group: "{{ runner_group }}"
         mode: "0750"
 
-    - name: Pobierz plik SHA-256 z GitHub Releases
-      ansible.builtin.uri:
-        url: >-
-          https://github.com/actions/runner/releases/download/v{{ _resolved_version }}/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz.sha256
-        return_content: true
-      register: _sha256_file
-      changed_when: false
-      when: not _runner_bin.stat.exists
-
-    - name: Wyodrębnij sumę SHA-256
+    # SHA-256 wyciągany z body odpowiedzi API — tego samego, które pobraliśmy
+    # dla wersji. Nie ma osobnego pliku .sha256 w releases (404).
+    # Wzorzec: "actions-runner-linux-x64-VERSION.tar.gz | HASH64"
+    # Brak hasha → ostrzeżenie i pobieranie bez sumy (nie blokuje instalacji).
+    - name: Wyodrębnij hash SHA-256 z opisu wydania
       ansible.builtin.set_fact:
-        # Plik zawiera "<hash>  <filename>" — bierzemy pierwsze pole
-        _sha256: "{{ _sha256_file.content.split()[0] }}"
-      when: not _runner_bin.stat.exists
+        _sha256: "{{ (_release.json.body | default('') | regex_search('actions-runner-linux-x64-' + _resolved_version + '\\.tar\\.gz\\S*[ \\t|]+([a-f0-9]{64})', '\\1') or [''])[0] }}"
+      when: _needs_install | bool
 
-    - name: Pobierz archiwum runnera (z weryfikacją sumy SHA-256)
+    - name: Ostrzeżenie — hash SHA-256 nie znaleziony w opisie wydania
+      ansible.builtin.debug:
+        msg: >
+          OSTRZEŻENIE: hash SHA-256 dla actions-runner-linux-x64-{{ _resolved_version }}.tar.gz
+          nie znaleziony w opisie wydania API. Format opisu mógł się zmienić.
+          Archiwum zostanie pobrane bez weryfikacji sumy (HTTPS z github.com).
+          Sprawdź ręcznie: https://github.com/actions/runner/releases/tag/v{{ _resolved_version }}
+      when: _needs_install | bool and (_sha256 | length == 0)
+
+    - name: Pobierz archiwum runnera
       ansible.builtin.get_url:
         url: >-
           https://github.com/actions/runner/releases/download/v{{ _resolved_version }}/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz
         dest: "/tmp/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz"
-        checksum: "sha256:{{ _sha256 }}"
+        # checksum przekazany tylko gdy hash został znaleziony w opisie wydania
+        checksum: "{{ ('sha256:' + _sha256) if _sha256 | length > 0 else omit }}"
         mode: "0644"
-      when: not _runner_bin.stat.exists
+      when: _needs_install | bool
 
     - name: Wypakuj archiwum runnera
       ansible.builtin.unarchive:
@@ -148,7 +180,16 @@
         owner: "{{ runner_user }}"
         group: "{{ runner_group }}"
         remote_src: true
-      when: not _runner_bin.stat.exists
+      when: _needs_install | bool
+
+    - name: Zapisz marker zainstalowanej wersji
+      ansible.builtin.copy:
+        content: "{{ _resolved_version }}"
+        dest: "{{ runner_dir }}/.installed-version"
+        owner: "{{ runner_user }}"
+        group: "{{ runner_group }}"
+        mode: "0640"
+      when: _needs_install | bool
 
     # ── Rejestracja runnera ───────────────────────────────────────────────────
     - name: Sprawdź czy runner już zarejestrowany
