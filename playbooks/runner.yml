@@ -48,7 +48,6 @@
 
     # ── Wersja runnera ────────────────────────────────────────────────────────
     # Jedno żądanie API — dla "latest" i dla przypiętej wersji.
-    # Odpowiedź zawiera też pole body z opisem wydania (używane do hasha SHA-256).
     - name: Pobierz dane wydania z GitHub API
       ansible.builtin.uri:
         url: >-
@@ -142,31 +141,14 @@
         group: "{{ runner_group }}"
         mode: "0750"
 
-    # SHA-256 wyciągany z body odpowiedzi API — tego samego, które pobraliśmy
-    # dla wersji. Nie ma osobnego pliku .sha256 w releases (404).
-    # Wzorzec: "actions-runner-linux-x64-VERSION.tar.gz | HASH64"
-    # Brak hasha → ostrzeżenie i pobieranie bez sumy (nie blokuje instalacji).
-    - name: Wyodrębnij hash SHA-256 z opisu wydania
-      ansible.builtin.set_fact:
-        _sha256: "{{ (_release.json.body | default('') | regex_search('actions-runner-linux-x64-' + _resolved_version + '\\.tar\\.gz\\S*[ \\t|]+([a-f0-9]{64})', '\\1') or [''])[0] }}"
-      when: _needs_install | bool
-
-    - name: Ostrzeżenie — hash SHA-256 nie znaleziony w opisie wydania
-      ansible.builtin.debug:
-        msg: >
-          OSTRZEŻENIE: hash SHA-256 dla actions-runner-linux-x64-{{ _resolved_version }}.tar.gz
-          nie znaleziony w opisie wydania API. Format opisu mógł się zmienić.
-          Archiwum zostanie pobrane bez weryfikacji sumy (HTTPS z github.com).
-          Sprawdź ręcznie: https://github.com/actions/runner/releases/tag/v{{ _resolved_version }}
-      when: _needs_install | bool and ((_sha256 | default('')) | length == 0)
-
+    # Pobieranie bez weryfikacji sumy — hash w opisie wydania jest w backtickach
+    # (` abc...64 `), co uniemożliwia parsowanie regexem. Bezpieczeństwo zapewnia
+    # HTTPS z github.com (certyfikat GitHub).
     - name: Pobierz archiwum runnera
       ansible.builtin.get_url:
         url: >-
           https://github.com/actions/runner/releases/download/v{{ _resolved_version }}/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz
         dest: "/tmp/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz"
-        # checksum przekazany tylko gdy hash został znaleziony w opisie wydania
-        checksum: "{{ ('sha256:' + (_sha256 | default(''))) if (_sha256 | default('')) | length > 0 else omit }}"
         mode: "0644"
       when: _needs_install | bool
 
@@ -194,32 +176,40 @@
         path: "{{ runner_dir }}/.runner"
       register: _runner_cfg
 
-    # no_log: true chroni --token w argv przed pojawieniem się w logach.
-    # Nie ukrywa stdout/stderr config.sh — te trafiają do _reg_result
-    # i są wyświetlane w kolejnym kroku (token nie pojawia się w outputcie config.sh).
-    # failed_when: false — błąd obsługujemy ręcznie, żeby zawsze widzieć output.
+    # Token przekazywany przez plik tymczasowy — nie pojawia się w argv ani w logach.
+    # Tylko krok zapisu pliku jest wyciszony (no_log: true); wynik config.sh widoczny.
+    - name: Zapisz token rejestracji do pliku tymczasowego
+      ansible.builtin.copy:
+        content: "{{ runner_token }}"
+        dest: /tmp/.runner-reg-token
+        owner: "{{ runner_user }}"
+        group: "{{ runner_group }}"
+        mode: "0600"
+      no_log: true
+      when: not _runner_cfg.stat.exists
+
     - name: Zarejestruj runnera w GitHub
-      ansible.builtin.command:
-        argv:
-          - "{{ runner_dir }}/config.sh"
-          - --unattended
-          - --url
-          - "{{ github_repo_url }}"
-          - --token
-          - "{{ runner_token }}"
-          - --name
-          - "{{ runner_name }}"
-          - --labels
-          - "{{ runner_labels }}"
+      ansible.builtin.shell:
+        cmd: >-
+          {{ runner_dir }}/config.sh
+          --unattended
+          --url "{{ github_repo_url }}"
+          --token "$(cat /tmp/.runner-reg-token)"
+          --name "{{ runner_name }}"
+          --labels "{{ runner_labels }}"
         chdir: "{{ runner_dir }}"
       become_user: "{{ runner_user }}"
       become: true
       when: not _runner_cfg.stat.exists
-      no_log: true          # chroni --token w argv
       register: _reg_result
-      failed_when: false    # błąd obsługujemy poniżej — żeby zawsze widzieć output
+      failed_when: false
 
-    - name: Pokaż output config.sh (token nie pojawia się w stdout/stderr)
+    - name: Usuń plik tymczasowy z tokenem
+      ansible.builtin.file:
+        path: /tmp/.runner-reg-token
+        state: absent
+
+    - name: Pokaż output config.sh
       ansible.builtin.debug:
         msg: "{{ (_reg_result.stdout_lines | default([])) + (_reg_result.stderr_lines | default([])) }}"
       when: not _runner_cfg.stat.exists
@@ -227,17 +217,17 @@
     - name: Fail jeśli rejestracja nie powiodła się
       ansible.builtin.fail:
         msg: >
-          Rejestracja runnera nie powiodła się (rc={{ _reg_result.rc }}).
+          Rejestracja runnera nie powiodła się (rc={{ _reg_result.rc | default('?') }}).
           Sprawdź output powyżej. Najczęstsze przyczyny:
           - token wygasł (ważny 1h od wygenerowania)
           - runner o nazwie "{{ runner_name }}" już istnieje w GitHub
             (GitHub → repo → Settings → Actions → Runners → usuń stary)
-      when: not _runner_cfg.stat.exists and _reg_result.rc != 0
+      when: not _runner_cfg.stat.exists and (_reg_result.rc | default(-1)) != 0
 
     - name: Rejestracja powiodła się
       ansible.builtin.debug:
         msg: "Runner {{ runner_name }} zarejestrowany. Etykiety: {{ runner_labels }}"
-      when: not _runner_cfg.stat.exists and _reg_result.rc == 0
+      when: not _runner_cfg.stat.exists and (_reg_result.rc | default(-1)) == 0
 
     # ── Usługa systemd ────────────────────────────────────────────────────────
     - name: Sprawdź czy usługa systemd już zainstalowana
@@ -250,7 +240,7 @@
       ansible.builtin.command:
         cmd: "{{ runner_dir }}/svc.sh install {{ runner_user }}"
         chdir: "{{ runner_dir }}"
-      when: _svc_exists.stdout | length == 0
+      when: _svc_exists.stdout | trim | length == 0
       changed_when: true
 
     - name: Pobierz nazwę usługi systemd
@@ -261,11 +251,11 @@
 
     - name: Uruchom i włącz usługę runnera
       ansible.builtin.systemd:
-        name: "{{ _svc_name.stdout }}"
+        name: "{{ _svc_name.stdout | trim }}"
         state: started
         enabled: true
         daemon_reload: true
-      when: _svc_name.stdout | length > 0
+      when: _svc_name.stdout | trim | length > 0
 
     # ── Wynik ─────────────────────────────────────────────────────────────────
     - name: Status runnera
