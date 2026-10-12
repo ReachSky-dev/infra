@@ -1,0 +1,47 @@
+# Konfiguracja środowiska demo — wartości jawne (nie tajne).
+# Celowo niższe limity RAM — demo służy do testów i rollback drill.
+# Sekrety pobierane ze zmiennych środowiskowych: GitHub Secrets w CI,
+# source /opt/reachsky/.deploy-env przy ręcznym uruchomieniu.
+
+# ── Tożsamość środowiska ──────────────────────────────────────────────────────
+env_name: demo
+
+# ── Połączenie SSH ────────────────────────────────────────────────────────────
+# ansible_host zdefiniowany w group_vars/all/vars.yml (wspólny serwer).
+ansible_user:                 reachsky
+ansible_ssh_private_key_file: ~/.ssh/id_reachsky
+
+# ── Adresy publiczne ──────────────────────────────────────────────────────────
+url_frontend: "https://demo.reachsky.pl"
+url_api:      "https://demo-api.reachsky.pl"
+url_auth:     "https://demo-auth.reachsky.pl"
+
+# ── Weryfikacja po deploy ─────────────────────────────────────────────────────
+verify_public:     false
+public_health_url: "{{ url_api }}/actuator/health"
+
+# ── Limity pamięci kontenerów ─────────────────────────────────────────────────
+mem_postgres:    "256m"
+mem_keycloak:    "512m"
+mem_backend:     "384m"
+mem_frontend:    "64m"
+mem_cloudflared: "64m"
+
+# ── JVM ───────────────────────────────────────────────────────────────────────
+jvm_max_ram_pct: 75.0
+
+# ── Sekrety demo (ze zmiennych środowiskowych) ────────────────────────────────
+db_password: >-
+  {{ lookup('env', 'DB_PASSWORD_DEMO')
+     | default(undef(), true)
+     | mandatory('DB_PASSWORD_DEMO nie jest ustawiony') }}
+
+kc_admin_password: >-
+  {{ lookup('env', 'KC_ADMIN_PASSWORD_DEMO')
+     | default(undef(), true)
+     | mandatory('KC_ADMIN_PASSWORD_DEMO nie jest ustawiony') }}
+
+cloudflare_tunnel_token: >-
+  {{ lookup('env', 'CF_TUNNEL_TOKEN_DEMO')
+     | default(undef(), true)
+     | mandatory('CF_TUNNEL_TOKEN_DEMO nie jest ustawiony') }}

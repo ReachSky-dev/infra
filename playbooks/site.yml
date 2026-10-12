@@ -1,0 +1,203 @@
+---
+# site.yml — jednorazowa konfiguracja serwera. Idempotentna.
+#
+# Użycie:
+#   ansible-playbook -i inventory.local.yml playbooks/site.yml -l prod
+#   ansible-playbook -i inventory.local.yml playbooks/site.yml -l demo
+#   ansible-playbook -i inventory.local.yml playbooks/site.yml          # oba
+#   ansible-playbook -i inventory.local.yml playbooks/site.yml -l prod --check --diff
+
+- name: "ReachSky — konfiguracja serwera ({{ env_name }})"
+  hosts: all
+  become: true
+
+  tasks:
+
+    # ── Zależności systemowe ──────────────────────────────────────────────────
+    # Ansible i community.general muszą być dostępne dla self-hosted runnera.
+    # Instalujemy system-wide (jako root) — runner user może je wywołać bez sudo.
+    - name: Zainstaluj Ansible
+      ansible.builtin.package:
+        name: ansible
+        state: present
+
+    - name: Zainstaluj kolekcję community.general
+      ansible.builtin.command:
+        cmd: ansible-galaxy collection install community.general --upgrade
+      changed_when: false
+
+    # ── Użytkownik aplikacji ──────────────────────────────────────────────────
+    - name: Utwórz grupę aplikacji
+      ansible.builtin.group:
+        name: "{{ app_group }}"
+        state: present
+
+    - name: Utwórz użytkownika aplikacji
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        groups: docker
+        append: true
+        shell: /bin/bash
+        create_home: true
+        state: present
+
+    # ── Katalogi środowiska ───────────────────────────────────────────────────
+    - name: "Utwórz katalog główny środowiska {{ env_name }}"
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0750"
+
+    - name: Utwórz podkatalogi (infra, backend, frontend)
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}/{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0750"
+      loop:
+        - infra
+        - infra/init
+        - infra/keycloak
+        - backend
+        - frontend
+
+    # ── Pliki statyczne ───────────────────────────────────────────────────────
+    - name: Skopiuj skrypty init SQL
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../init/"
+        dest: "{{ infra_dir }}/init/"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+
+    - name: "Skopiuj realm.json (keycloak/{{ env_name }}/realm.json → jeśli istnieje)"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../keycloak/{{ env_name }}/realm.json"
+        dest: "{{ infra_dir }}/keycloak/realm.json"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+      ignore_errors: true
+      register: realm_copy
+
+    - name: Ostrzeżenie — brak realm.json
+      ansible.builtin.debug:
+        msg: >
+          UWAGA: keycloak/{{ env_name }}/realm.json nie istnieje lokalnie.
+          Keycloak wystartuje bez importu realmu. Wróć do README — Krok 5.
+      when: realm_copy is failed
+
+    - name: Utwórz .deployed_backend (jeśli nie istnieje)
+      ansible.builtin.copy:
+        content: >-
+          {{ {
+            "current":  {"digest": "none", "commit": "none"},
+            "previous": {"digest": "none", "commit": "none"}
+          } | to_nice_json }}
+        dest: "{{ deploy_dir }}/.deployed_backend"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+        force: false
+
+    - name: Utwórz .deployed_frontend (jeśli nie istnieje)
+      ansible.builtin.copy:
+        content: >-
+          {{ {
+            "current":  {"digest": "none", "commit": "none"},
+            "previous": {"digest": "none", "commit": "none"}
+          } | to_nice_json }}
+        dest: "{{ deploy_dir }}/.deployed_frontend"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+        force: false
+
+    # ── UFW — weryfikacja przed zastosowaniem reguł ──────────────────────────
+    # SSH_CLIENT zawiera "client_ip client_port server_port".
+    # Przy ansible_connection=local (self-hosted runner) SSH_CLIENT jest puste
+    # i sprawdzenie jest pomijane.
+
+    - name: "UFW — pobierz IP klienta SSH (SSH_CLIENT)"
+      ansible.builtin.shell: "echo ${SSH_CLIENT%% *}"
+      register: _client_ip
+      changed_when: false
+      become: false
+
+    - name: "UFW — sprawdź CIDR (abort zanim UFW odetnie SSH)"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import ipaddress, sys
+            ip, net = sys.argv[1], sys.argv[2]
+            if ipaddress.ip_address(ip) not in ipaddress.ip_network(net, strict=False):
+                print("FAIL: {} nie nalezy do {}".format(ip, net))
+                sys.exit(1)
+            print("OK: {} nalezy do {}".format(ip, net))
+          - "{{ _client_ip.stdout }}"
+          - "{{ local_network_cidr }}"
+      register: _cidr_check
+      changed_when: false
+      failed_when: _cidr_check.rc != 0
+      when: _client_ip.stdout | length > 0
+
+    - name: "UFW — wynik weryfikacji CIDR"
+      ansible.builtin.debug:
+        msg: >
+          {{ _cidr_check.stdout | default('(połączenie lokalne — weryfikacja pominięta)') }}
+      when: not ansible_check_mode
+
+    # ── UFW — reguły ─────────────────────────────────────────────────────────
+    - name: UFW — zainstaluj (jeśli brak)
+      ansible.builtin.package:
+        name: ufw
+        state: present
+
+    - name: UFW — zezwól SSH z sieci lokalnej (ZAWSZE PIERWSZY KROK)
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        src: "{{ local_network_cidr }}"
+        comment: "SSH z sieci lokalnej"
+
+    - name: UFW — zablokuj port 80 inbound
+      community.general.ufw:
+        rule: deny
+        port: "80"
+        proto: tcp
+        comment: "HTTP — dostęp tylko przez Cloudflare Tunnel"
+
+    - name: UFW — zablokuj port 443 inbound
+      community.general.ufw:
+        rule: deny
+        port: "443"
+        proto: tcp
+        comment: "HTTPS — dostęp tylko przez Cloudflare Tunnel"
+
+    - name: UFW — ustaw politykę domyślną incoming=deny, outgoing=allow
+      community.general.ufw:
+        policy: "{{ item.policy }}"
+        direction: "{{ item.direction }}"
+      loop:
+        - { policy: deny,  direction: incoming }
+        - { policy: allow, direction: outgoing }
+
+    - name: UFW — włącz (lub reload jeśli już włączony)
+      community.general.ufw:
+        state: enabled
+
+    - name: UFW — pokaż aktualny stan reguł
+      ansible.builtin.command: ufw status verbose
+      changed_when: false
+      register: ufw_status
+
+    - name: UFW — wyświetl stan
+      ansible.builtin.debug:
+        msg: "{{ ufw_status.stdout_lines }}"

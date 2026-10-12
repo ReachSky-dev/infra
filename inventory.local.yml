@@ -1,0 +1,15 @@
+---
+# inventory.local.yml — uruchomienie server-side (bootstrap, self-hosted runner).
+# ansible_connection: local — Ansible działa bezpośrednio na serwerze.
+# ansible_host pochodzi z group_vars/{env}/vault.yml — nie trafia do repo.
+
+all:
+  children:
+    prod:
+      hosts:
+        reachsky-prod:
+          ansible_connection: local
+    demo:
+      hosts:
+        reachsky-demo:
+          ansible_connection: local

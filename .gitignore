@@ -1,0 +1,7 @@
+# Wygenerowane przez Ansible
+*.retry
+.ansible/
+
+# Lokalne
+*.pyc
+__pycache__/

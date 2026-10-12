@@ -1,0 +1,2 @@
+---
+# Brak handlerów — restart odbywa się przez compose up -d w tasks/main.yml.

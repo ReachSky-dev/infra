@@ -1,0 +1,92 @@
+---
+# rollback.yml — ręczny rollback serwisu do wskazanego lub poprzedniego digestu.
+#
+# Wyzwalany przez .github/workflows/rollback.yml (workflow_dispatch w GitHub UI)
+# lub bezpośrednio z linii poleceń.
+#
+# Użycie z linii poleceń:
+#   # Rollback do poprzedniego digestu (z .deployed_{service}):
+#   ansible-playbook -i inventory.local.yml playbooks/rollback.yml \
+#     -l prod -e "service=backend"
+#
+#   # Rollback do konkretnego digestu:
+#   ansible-playbook -i inventory.local.yml playbooks/rollback.yml \
+#     -l prod -e "service=backend" \
+#     -e "backend_digest=sha256:abc123..." \
+#     -e "backend_commit=abc123"
+#
+# Parametr service: backend | frontend
+
+- name: "ReachSky — rollback ({{ env_name }})"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  tasks:
+
+    - name: Sprawdź parametr service
+      ansible.builtin.fail:
+        msg: >
+          Parametr 'service' jest wymagany i musi być 'backend' lub 'frontend'.
+          Użycie: -e "service=backend" albo -e "service=frontend"
+      when: >
+        service is not defined or
+        service not in ['backend', 'frontend']
+
+    # ── Wczytaj aktualny stan ─────────────────────────────────────────────────
+    - name: Odczytaj .deployed_{{ service }}
+      ansible.builtin.slurp:
+        src: "{{ deploy_dir }}/.deployed_{{ service }}"
+      register: _deployed_raw
+      failed_when: false
+
+    - name: Parsuj stan
+      ansible.builtin.set_fact:
+        _deployed: >-
+          {{
+            (_deployed_raw.content | b64decode | from_json)
+            if (_deployed_raw is not failed and _deployed_raw.content is defined)
+            else {"current": {"digest": "none", "commit": "none"},
+                  "previous": {"digest": "none", "commit": "none"}}
+          }}
+
+    # ── Ustal docelowy digest ─────────────────────────────────────────────────
+    - name: Ustaw digest rollbacku
+      ansible.builtin.set_fact:
+        _target_digest: >-
+          {{
+            vars[service + '_digest']
+            if (service + '_digest') in vars
+            else _deployed.previous.digest
+          }}
+        _target_commit: >-
+          {{
+            vars[service + '_commit']
+            if (service + '_commit') in vars
+            else _deployed.previous.commit
+          }}
+
+    - name: Pokaż plan rollbacku
+      ansible.builtin.debug:
+        msg:
+          - "Środowisko : {{ env_name }}"
+          - "Serwis     : {{ service }}"
+          - "Aktualnie  : digest={{ _deployed.current.digest[:19] }}... commit={{ _deployed.current.commit[:8] }}"
+          - "Rollback do: digest={{ _target_digest[:19] }}... commit={{ _target_commit[:8] }}"
+
+    - name: Fail jeśli brak digestu do rollbacku
+      ansible.builtin.fail:
+        msg: >
+          Brak historii w .deployed_{{ service }} (previous="none") i nie podano digestu przez -e.
+          Podaj digest ręcznie: -e "{{ service }}_digest=sha256:..."
+          SHA znajdziesz w historii deploy na GitHubie lub na Docker Hub.
+      when: _target_digest == 'none'
+
+    # ── Wykonaj rollback przez rolę ───────────────────────────────────────────
+    - name: "Rollback {{ service }}"
+      ansible.builtin.include_role:
+        name: "apps/{{ service }}"
+      vars:
+        "{{ service }}_digest": "{{ _target_digest }}"
+        "{{ service }}_commit": "{{ _target_commit }}"
+        _is_rollback: true

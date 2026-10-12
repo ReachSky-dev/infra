@@ -1,0 +1,14 @@
+---
+# frontend.yml — wdraża frontend.
+#
+# Użycie:
+#   ansible-playbook -i inventory.local.yml playbooks/apps/frontend.yml \
+#     -l demo -e "frontend_digest=sha256:... frontend_commit=abc123"
+
+- name: "ReachSky — deploy frontend ({{ env_name }})"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: apps/frontend

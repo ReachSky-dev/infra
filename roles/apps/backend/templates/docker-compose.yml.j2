@@ -1,0 +1,38 @@
+# Generowany przez Ansible — nie edytuj ręcznie na serwerze.
+# Źródło: roles/apps/backend/templates/docker-compose.yml.j2
+#
+# Środowisko: {{ env_name }}
+# Obraz:      {{ dockerhub_username }}/reachsky-backend@{{ backend_digest }}
+# Sieć {{ internal_network_name }} tworzona przez rolę infra — external: true.
+
+services:
+
+  backend:
+    image: ${BACKEND_IMAGE}
+    container_name: "reachsky-{{ env_name }}-backend"
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_URL:      jdbc:postgresql://postgres:5432/reachsky
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ url_auth }}/realms/reachsky
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage={{ jvm_max_ram_pct }}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: {{ mem_backend }}
+
+networks:
+  internal:
+    name: "{{ internal_network_name }}"
+    external: true   # tworzona przez rolę infra

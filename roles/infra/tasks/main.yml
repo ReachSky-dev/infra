@@ -1,0 +1,69 @@
+---
+# Rola infra — uruchamia stos infrastrukturalny środowiska:
+# postgres, keycloak, cloudflared.
+# Tworzy sieć {{ internal_network_name }}, na której działają serwisy aplikacyjne.
+# Idempotentna — kolejne uruchomienia nie restartują działających kontenerów.
+
+- name: Wygeneruj docker-compose.infra.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ infra_dir }}/docker-compose.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0640"
+
+- name: Zapisz .env infrastruktury (tryb 0600)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ infra_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0600"
+
+- name: docker compose pull (infra)
+  ansible.builtin.command:
+    cmd: >
+      docker compose
+      --project-name {{ infra_project }}
+      --env-file {{ infra_dir }}/.env
+      -f {{ infra_dir }}/docker-compose.yml
+      pull
+  changed_when: true
+
+- name: docker compose up -d (infra)
+  ansible.builtin.command:
+    cmd: >
+      docker compose
+      --project-name {{ infra_project }}
+      --env-file {{ infra_dir }}/.env
+      -f {{ infra_dir }}/docker-compose.yml
+      up -d
+  changed_when: true
+
+- name: Czekaj na postgres healthy
+  ansible.builtin.command:
+    cmd: >
+      docker inspect
+      {% raw %}--format={{.State.Health.Status}}{% endraw %}
+      reachsky-{{ env_name }}-postgres
+  register: _pg_health
+  retries: "{{ health_retries }}"
+  delay:   "{{ health_delay_seconds }}"
+  until:   _pg_health.stdout == "healthy"
+  changed_when: false
+
+- name: Czekaj na keycloak healthy
+  ansible.builtin.command:
+    cmd: >
+      docker inspect
+      {% raw %}--format={{.State.Health.Status}}{% endraw %}
+      reachsky-{{ env_name }}-keycloak
+  register: _kc_health
+  retries: "{{ health_retries }}"
+  delay:   "{{ health_delay_seconds }}"
+  until:   _kc_health.stdout == "healthy"
+  changed_when: false
+
+- name: Infrastruktura gotowa
+  ansible.builtin.debug:
+    msg: "OK [{{ env_name }}] — postgres i keycloak healthy, sieć {{ internal_network_name }} aktywna"

@@ -1,0 +1,80 @@
+name: Rollback
+
+# Uruchamiany ręcznie z GitHub UI: Actions → Rollback → Run workflow.
+# Prod wymaga akceptacji w GitHub Environment "production".
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Serwis do rollbacku'
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+      environment:
+        description: 'Środowisko'
+        required: true
+        type: choice
+        options:
+          - demo
+          - prod
+      digest:
+        description: 'Docelowy digest (sha256:...) — puste = poprzedni deploy'
+        required: false
+        type: string
+      commit:
+        description: 'SHA commita (informacyjny, opcjonalny)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: "Rollback ${{ inputs.service }} — ${{ inputs.environment }}"
+    runs-on: [self-hosted, reachsky]
+    environment:
+      name: ${{ inputs.environment == 'prod' && 'production' || inputs.environment }}
+      url: ${{ inputs.environment == 'prod' && 'https://reachsky.pl' || 'https://demo.reachsky.pl' }}
+    # Przekazujemy wszystkie sekrety — Ansible z group_vars odczyta tylko te,
+    # które pasują do wybranego środowiska (DB_PASSWORD_PROD lub _DEMO).
+    env:
+      ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
+      LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DB_PASSWORD_PROD:       ${{ secrets.DB_PASSWORD_PROD }}
+      DB_PASSWORD_DEMO:       ${{ secrets.DB_PASSWORD_DEMO }}
+      KC_ADMIN_PASSWORD_PROD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
+      KC_ADMIN_PASSWORD_DEMO: ${{ secrets.KC_ADMIN_PASSWORD_DEMO }}
+      CF_TUNNEL_TOKEN_PROD:   ${{ secrets.CF_TUNNEL_TOKEN_PROD }}
+      CF_TUNNEL_TOKEN_DEMO:   ${{ secrets.CF_TUNNEL_TOKEN_DEMO }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rollback
+        run: |
+          EXTRA_VARS=""
+          if [ -n "${{ inputs.digest }}" ]; then
+            EXTRA_VARS="-e ${{ inputs.service }}_digest=${{ inputs.digest }}"
+            if [ -n "${{ inputs.commit }}" ]; then
+              EXTRA_VARS="$EXTRA_VARS -e ${{ inputs.service }}_commit=${{ inputs.commit }}"
+            fi
+          fi
+          ansible-playbook -i inventory.local.yml playbooks/rollback.yml \
+            -l "${{ inputs.environment }}" \
+            -e "service=${{ inputs.service }}" \
+            $EXTRA_VARS
+
+      - name: Job summary
+        if: success()
+        run: |
+          echo "## Rollback ${{ inputs.service }} — ${{ inputs.environment }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Serwis** | ${{ inputs.service }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Środowisko** | ${{ inputs.environment }} |" >> "$GITHUB_STEP_SUMMARY"
+          DIGEST="${{ inputs.digest }}"
+          echo "| **Digest** | \`${DIGEST:-poprzedni}\` |" >> "$GITHUB_STEP_SUMMARY"

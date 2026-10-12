@@ -1,0 +1,14 @@
+---
+# backend.yml — wdraża backend.
+#
+# Użycie:
+#   ansible-playbook -i inventory.local.yml playbooks/apps/backend.yml \
+#     -l demo -e "backend_digest=sha256:... backend_commit=abc123"
+
+- name: "ReachSky — deploy backend ({{ env_name }})"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: apps/backend

@@ -1,0 +1,177 @@
+---
+# Rola apps/backend — wdraża backend po digestcie obrazu.
+# Wymagane zmienne: backend_digest (sha256:...)
+# Opcjonalne:       backend_commit (SHA git, informacyjny)
+
+- name: Sprawdź wymagane zmienne
+  ansible.builtin.fail:
+    msg: >
+      backend_digest jest wymagany i musi zaczynać się od 'sha256:'.
+      Użycie: -e "backend_digest=sha256:..."
+  when: >
+    backend_digest is not defined or
+    not backend_digest.startswith('sha256:')
+
+# ── Poprzedni stan ────────────────────────────────────────────────────────────
+- name: Odczytaj .deployed_backend
+  ansible.builtin.slurp:
+    src: "{{ deploy_dir }}/.deployed_backend"
+  register: _deployed_raw
+  failed_when: false
+
+- name: Parsuj poprzedni stan
+  ansible.builtin.set_fact:
+    _prev: >-
+      {{
+        (_deployed_raw.content | b64decode | from_json).current
+        if (_deployed_raw is not failed and _deployed_raw.content is defined)
+        else {"digest": "none", "commit": "none"}
+      }}
+
+- name: Pokaż co wdrażamy
+  ansible.builtin.debug:
+    msg:
+      - "Środowisko : {{ env_name }}"
+      - "Nowy digest: {{ backend_digest }}"
+      - "Nowy commit: {{ backend_commit | default('(nie podano)') }}"
+      - "Poprzedni  : {{ _prev.digest[:19] if _prev.digest != 'none' else 'none' }}..."
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+- name: Wygeneruj docker-compose.backend.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ backend_dir }}/docker-compose.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0640"
+
+- name: Zapisz .env backendu (tryb 0600)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ backend_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0600"
+
+- name: Sprawdź zdrowie + aktualizuj stan
+  block:
+
+    - name: docker compose pull (backend)
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ backend_project }}
+          --env-file {{ backend_dir }}/.env
+          -f {{ backend_dir }}/docker-compose.yml
+          pull
+      changed_when: true
+
+    - name: docker compose up -d (backend)
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ backend_project }}
+          --env-file {{ backend_dir }}/.env
+          -f {{ backend_dir }}/docker-compose.yml
+          up -d
+      changed_when: true
+
+    - name: Czekaj na backend healthy
+      ansible.builtin.command:
+        cmd: >
+          docker inspect
+          {% raw %}--format={{.State.Health.Status}}{% endraw %}
+          reachsky-{{ env_name }}-backend
+      register: _health
+      retries: "{{ health_retries }}"
+      delay:   "{{ health_delay_seconds }}"
+      until:   _health.stdout == "healthy"
+      changed_when: false
+
+    - name: Weryfikacja przez tunel — GET /actuator/health
+      ansible.builtin.uri:
+        url: "{{ public_health_url }}"
+        method: GET
+        status_code: 200
+        timeout: 10
+        return_content: true
+      register: _public_check
+      retries: 6
+      delay: 10
+      until: >
+        _public_check.status | default(0) == 200 and
+        (_public_check.json.status | default('DOWN')) == 'UP'
+      when: verify_public | default(false) | bool
+
+    - name: Zaktualizuj .deployed_backend
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              "current":  {"digest": backend_digest,  "commit": backend_commit | default("none")},
+              "previous": {"digest": _prev.digest,    "commit": _prev.commit}
+            } | to_nice_json
+          }}
+        dest: "{{ deploy_dir }}/.deployed_backend"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+
+    - name: Deploy zakończony sukcesem
+      ansible.builtin.debug:
+        msg: >
+          OK [{{ env_name }}] backend@{{ backend_digest[:19] }}...
+          commit={{ backend_commit | default('n/a') | truncate(8, True, '') }}
+
+  rescue:
+    # ── Auto-rollback ─────────────────────────────────────────────────────────
+    - name: Pobierz logi backendu przed rollbackiem
+      ansible.builtin.command:
+        cmd: "docker logs reachsky-{{ env_name }}-backend --tail 80"
+      changed_when: false
+      failed_when: false
+      register: _backend_logs
+
+    - name: Wyświetl logi backendu
+      ansible.builtin.debug:
+        msg: "{{ _backend_logs.stdout_lines | default(['(brak logów)']) }}"
+
+    - name: "ROLLBACK — abort, brak poprzedniej wersji"
+      ansible.builtin.fail:
+        msg: >
+          Deploy nieudany i nie ma poprzedniej wersji (pierwszy deploy lub rollback już wykonany).
+          Sprawdź logi powyżej: docker logs reachsky-{{ env_name }}-backend --tail 200
+      when: _prev.digest == 'none' or (_is_rollback | default(false))
+
+    - name: "ROLLBACK — przywracam poprzedni digest"
+      ansible.builtin.debug:
+        msg:
+          - "Health check nieudany — rollback do {{ _prev.digest[:19] }}..."
+          - "commit={{ _prev.commit[:8] if _prev.commit != 'none' else 'n/a' }}"
+
+    - name: Rollback — zapisz .env z poprzednim digestem
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ backend_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0600"
+      vars:
+        backend_digest: "{{ _prev.digest }}"
+        backend_commit:  "{{ _prev.commit }}"
+
+    - name: Rollback — docker compose up z poprzednim digestem
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ backend_project }}
+          --env-file {{ backend_dir }}/.env
+          -f {{ backend_dir }}/docker-compose.yml
+          up -d
+      changed_when: true
+
+    - name: Rollback — zakończ playbook błędem
+      ansible.builtin.fail:
+        msg: >
+          Deploy NIEUDANY [{{ env_name }}]. Auto-rollback do {{ _prev.digest[:19] }}...
+          Sprawdź logi powyżej lub: docker logs reachsky-{{ env_name }}-backend --tail 200

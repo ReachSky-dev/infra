@@ -1,0 +1,46 @@
+# Konfiguracja środowiska prod — wartości jawne (nie tajne).
+# Sekrety pobierane ze zmiennych środowiskowych: GitHub Secrets w CI,
+# source /opt/reachsky/.deploy-env przy ręcznym uruchomieniu.
+
+# ── Tożsamość środowiska ──────────────────────────────────────────────────────
+env_name: prod
+
+# ── Połączenie SSH ────────────────────────────────────────────────────────────
+# ansible_host zdefiniowany w group_vars/all/vars.yml (wspólny serwer).
+ansible_user:                 reachsky
+ansible_ssh_private_key_file: ~/.ssh/id_reachsky
+
+# ── Adresy publiczne ──────────────────────────────────────────────────────────
+url_frontend: "https://reachsky.pl"
+url_api:      "https://api.reachsky.pl"
+url_auth:     "https://auth.reachsky.pl"
+
+# ── Weryfikacja po deploy ─────────────────────────────────────────────────────
+verify_public:     false
+public_health_url: "{{ url_api }}/actuator/health"
+
+# ── Limity pamięci kontenerów ─────────────────────────────────────────────────
+mem_postgres:    "512m"
+mem_keycloak:    "768m"
+mem_backend:     "512m"
+mem_frontend:    "128m"
+mem_cloudflared: "64m"
+
+# ── JVM ───────────────────────────────────────────────────────────────────────
+jvm_max_ram_pct: 75.0
+
+# ── Sekrety prod (ze zmiennych środowiskowych) ────────────────────────────────
+db_password: >-
+  {{ lookup('env', 'DB_PASSWORD_PROD')
+     | default(undef(), true)
+     | mandatory('DB_PASSWORD_PROD nie jest ustawiony') }}
+
+kc_admin_password: >-
+  {{ lookup('env', 'KC_ADMIN_PASSWORD_PROD')
+     | default(undef(), true)
+     | mandatory('KC_ADMIN_PASSWORD_PROD nie jest ustawiony') }}
+
+cloudflare_tunnel_token: >-
+  {{ lookup('env', 'CF_TUNNEL_TOKEN_PROD')
+     | default(undef(), true)
+     | mandatory('CF_TUNNEL_TOKEN_PROD nie jest ustawiony') }}

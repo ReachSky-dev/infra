@@ -1,0 +1,16 @@
+---
+# infra.yml — wdraża/aktualizuje stos infrastrukturalny środowiska.
+# Uruchamiaj przy: pierwszym starcie, aktualizacji Keycloak, rotacji tokenu tunelu.
+# NIE uruchamiaj przy deployach backendu/frontendu — do tego służą roles/apps/*.
+#
+# Użycie:
+#   ansible-playbook -i inventory.local.yml playbooks/infra.yml -l prod
+#   ansible-playbook -i inventory.local.yml playbooks/infra.yml -l demo
+
+- name: "ReachSky — infrastruktura środowiska ({{ env_name }})"
+  hosts: all
+  become: true
+  gather_facts: false
+
+  roles:
+    - role: infra

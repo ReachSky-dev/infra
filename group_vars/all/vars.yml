@@ -1,0 +1,50 @@
+# Wartości wspólne dla wszystkich środowisk.
+# Nie zawiera wartości tajnych — te są w group_vars/{env}/vault.yml.
+# env_name MUSI być zdefiniowany w group_vars/{env}/vars.yml.
+
+# ── Serwer ────────────────────────────────────────────────────────────────────
+app_user:    reachsky
+app_group:   reachsky
+deploy_base: /opt/reachsky
+
+# ── Zmienne pochodne ──────────────────────────────────────────────────────────
+deploy_dir:   "{{ deploy_base }}/{{ env_name }}"
+infra_dir:    "{{ deploy_dir }}/infra"
+backend_dir:  "{{ deploy_dir }}/backend"
+frontend_dir: "{{ deploy_dir }}/frontend"
+
+# Projekty Compose — każde środowisko i każdy serwis ma osobny projekt.
+infra_project:    "reachsky-{{ env_name }}-infra"
+backend_project:  "reachsky-{{ env_name }}-backend"
+frontend_project: "reachsky-{{ env_name }}-frontend"
+
+db_username: "reachsky_{{ env_name }}"
+
+# ── Docker Hub ────────────────────────────────────────────────────────────────
+dockerhub_username: rafals57
+
+# ── OIDC ──────────────────────────────────────────────────────────────────────
+oidc_client_id: reachsky-frontend
+
+# ── Sieć środowiskowa ─────────────────────────────────────────────────────────
+# Tworzona przez rolę infra, referencjonowana przez role apps jako external.
+internal_network_name: "reachsky-{{ env_name }}-internal"
+
+# ── Health check ──────────────────────────────────────────────────────────────
+# Łącznie max: health_retries * health_delay_seconds = 300 s = 5 minut.
+health_retries:       20
+health_delay_seconds: 15
+
+# ── Połączenie (wspólne — oba środowiska działają na tym samym serwerze) ──────
+# W CI: GitHub Secrets. Lokalnie: source /opt/reachsky/.deploy-env
+ansible_host: >-
+  {{ lookup('env', 'ANSIBLE_HOST')
+     | default(undef(), true)
+     | mandatory('ANSIBLE_HOST nie jest ustawiony. Źródło: GitHub Secrets lub source /opt/reachsky/.deploy-env') }}
+
+# ── UFW ───────────────────────────────────────────────────────────────────────
+# W CI: GitHub Secrets. Lokalnie: source /opt/reachsky/.deploy-env
+local_network_cidr: >-
+  {{ lookup('env', 'LOCAL_NETWORK_CIDR')
+     | default(undef(), true)
+     | mandatory('LOCAL_NETWORK_CIDR nie jest ustawiony. Źródło: GitHub Secrets lub source /opt/reachsky/.deploy-env') }}

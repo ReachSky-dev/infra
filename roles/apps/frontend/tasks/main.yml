@@ -1,0 +1,159 @@
+---
+# Rola apps/frontend — wdraża frontend po digestcie obrazu.
+# Wymagane zmienne: frontend_digest (sha256:...)
+# Opcjonalne:       frontend_commit (SHA git, informacyjny)
+
+- name: Sprawdź wymagane zmienne
+  ansible.builtin.fail:
+    msg: >
+      frontend_digest jest wymagany i musi zaczynać się od 'sha256:'.
+      Użycie: -e "frontend_digest=sha256:..."
+  when: >
+    frontend_digest is not defined or
+    not frontend_digest.startswith('sha256:')
+
+# ── Poprzedni stan ────────────────────────────────────────────────────────────
+- name: Odczytaj .deployed_frontend
+  ansible.builtin.slurp:
+    src: "{{ deploy_dir }}/.deployed_frontend"
+  register: _deployed_raw
+  failed_when: false
+
+- name: Parsuj poprzedni stan
+  ansible.builtin.set_fact:
+    _prev: >-
+      {{
+        (_deployed_raw.content | b64decode | from_json).current
+        if (_deployed_raw is not failed and _deployed_raw.content is defined)
+        else {"digest": "none", "commit": "none"}
+      }}
+
+- name: Pokaż co wdrażamy
+  ansible.builtin.debug:
+    msg:
+      - "Środowisko : {{ env_name }}"
+      - "Nowy digest: {{ frontend_digest }}"
+      - "Nowy commit: {{ frontend_commit | default('(nie podano)') }}"
+      - "Poprzedni  : {{ _prev.digest[:19] if _prev.digest != 'none' else 'none' }}..."
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+- name: Wygeneruj docker-compose.frontend.yml
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ frontend_dir }}/docker-compose.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0640"
+
+- name: Zapisz .env frontendu (tryb 0600)
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ frontend_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0600"
+
+- name: Deploy i weryfikacja
+  block:
+
+    - name: docker compose pull (frontend)
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ frontend_project }}
+          --env-file {{ frontend_dir }}/.env
+          -f {{ frontend_dir }}/docker-compose.yml
+          pull
+      changed_when: true
+
+    - name: docker compose up -d (frontend)
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ frontend_project }}
+          --env-file {{ frontend_dir }}/.env
+          -f {{ frontend_dir }}/docker-compose.yml
+          up -d
+      changed_when: true
+
+    - name: Czekaj na frontend running (brak healthcheck — sprawdzamy status)
+      ansible.builtin.command:
+        cmd: >
+          docker inspect
+          {% raw %}--format={{.State.Status}}{% endraw %}
+          reachsky-{{ env_name }}-frontend
+      register: _status
+      retries: 12
+      delay: 5
+      until: _status.stdout == "running"
+      changed_when: false
+
+    - name: Zaktualizuj .deployed_frontend
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              "current":  {"digest": frontend_digest, "commit": frontend_commit | default("none")},
+              "previous": {"digest": _prev.digest,    "commit": _prev.commit}
+            } | to_nice_json
+          }}
+        dest: "{{ deploy_dir }}/.deployed_frontend"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0640"
+
+    - name: Deploy zakończony sukcesem
+      ansible.builtin.debug:
+        msg: >
+          OK [{{ env_name }}] frontend@{{ frontend_digest[:19] }}...
+          commit={{ frontend_commit | default('n/a') | truncate(8, True, '') }}
+
+  rescue:
+    - name: Pobierz logi frontendu przed rollbackiem
+      ansible.builtin.command:
+        cmd: "docker logs reachsky-{{ env_name }}-frontend --tail 80"
+      changed_when: false
+      failed_when: false
+      register: _frontend_logs
+
+    - name: Wyświetl logi frontendu
+      ansible.builtin.debug:
+        msg: "{{ _frontend_logs.stdout_lines | default(['(brak logów)']) }}"
+
+    - name: "ROLLBACK — abort, brak poprzedniej wersji"
+      ansible.builtin.fail:
+        msg: >
+          Deploy nieudany i nie ma poprzedniej wersji (pierwszy deploy lub rollback już wykonany).
+          Sprawdź logi powyżej: docker logs reachsky-{{ env_name }}-frontend --tail 200
+      when: _prev.digest == 'none' or (_is_rollback | default(false))
+
+    - name: "ROLLBACK — przywracam poprzedni digest"
+      ansible.builtin.debug:
+        msg: "Health check nieudany — rollback do {{ _prev.digest[:19] }}..."
+
+    - name: Rollback — zapisz .env z poprzednim digestem
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ frontend_dir }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0600"
+      vars:
+        frontend_digest: "{{ _prev.digest }}"
+        frontend_commit:  "{{ _prev.commit }}"
+
+    - name: Rollback — docker compose up z poprzednim digestem
+      ansible.builtin.command:
+        cmd: >
+          docker compose
+          --project-name {{ frontend_project }}
+          --env-file {{ frontend_dir }}/.env
+          -f {{ frontend_dir }}/docker-compose.yml
+          up -d
+      changed_when: true
+
+    - name: Rollback — zakończ playbook błędem
+      ansible.builtin.fail:
+        msg: >
+          Deploy NIEUDANY [{{ env_name }}]. Auto-rollback do {{ _prev.digest[:19] }}...
+          Sprawdź logi powyżej lub: docker logs reachsky-{{ env_name }}-frontend --tail 200

@@ -1,0 +1,166 @@
+name: Deploy
+
+# Wyzwalany przez serwisy (backend/frontend) po udanym pushu obrazu na Docker Hub.
+# Payload: { "digest": "sha256:...", "commit": "<git-sha>" }
+on:
+  repository_dispatch:
+    types: [deploy-backend, deploy-frontend]
+
+permissions:
+  contents: read
+
+# Jeden aktywny deploy danego serwisu naraz — kolejne czekają, nie są anulowane.
+concurrency:
+  group: "deploy-${{ github.event.action }}"
+  cancel-in-progress: false
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # BACKEND
+  # ────────────────────────────────────────────────────────────────────────────
+
+  deploy-backend-demo:
+    name: Deploy backend — demo
+    if: github.event.action == 'deploy-backend'
+    runs-on: [self-hosted, reachsky]
+    environment:
+      name: demo
+      url: https://demo.reachsky.pl
+    env:
+      ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
+      LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DB_PASSWORD_DEMO:       ${{ secrets.DB_PASSWORD_DEMO }}
+      KC_ADMIN_PASSWORD_DEMO: ${{ secrets.KC_ADMIN_PASSWORD_DEMO }}
+      CF_TUNNEL_TOKEN_DEMO:   ${{ secrets.CF_TUNNEL_TOKEN_DEMO }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy backend demo
+        run: |
+          ansible-playbook -i inventory.local.yml playbooks/apps/backend.yml -l demo \
+            -e "backend_digest=${{ github.event.client_payload.digest }}" \
+            -e "backend_commit=${{ github.event.client_payload.commit }}"
+
+      - name: Job summary
+        if: success()
+        run: |
+          echo "## Deploy backend — demo" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Digest** | \`${{ github.event.client_payload.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.event.client_payload.commit }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **URL** | https://demo.reachsky.pl |" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-backend-prod:
+    name: Deploy backend — prod
+    needs: deploy-backend-demo
+    # Prod uruchamia się TYLKO gdy demo zakończyło się sukcesem.
+    # Przy niepowodzeniu demo: job jest skipped — środowisko production
+    # nigdy nie pokaże okna akceptacji.
+    if: needs.deploy-backend-demo.result == 'success'
+    runs-on: [self-hosted, reachsky]
+    environment:
+      name: production
+      url: https://reachsky.pl
+    env:
+      ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
+      LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DB_PASSWORD_PROD:       ${{ secrets.DB_PASSWORD_PROD }}
+      KC_ADMIN_PASSWORD_PROD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
+      CF_TUNNEL_TOKEN_PROD:   ${{ secrets.CF_TUNNEL_TOKEN_PROD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy backend prod
+        run: |
+          ansible-playbook -i inventory.local.yml playbooks/apps/backend.yml -l prod \
+            -e "backend_digest=${{ github.event.client_payload.digest }}" \
+            -e "backend_commit=${{ github.event.client_payload.commit }}"
+
+      - name: Job summary
+        if: success()
+        run: |
+          echo "## Deploy backend — prod" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Digest** | \`${{ github.event.client_payload.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.event.client_payload.commit }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **URL** | https://reachsky.pl |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # FRONTEND
+  # ────────────────────────────────────────────────────────────────────────────
+
+  deploy-frontend-demo:
+    name: Deploy frontend — demo
+    if: github.event.action == 'deploy-frontend'
+    runs-on: [self-hosted, reachsky]
+    environment:
+      name: demo
+      url: https://demo.reachsky.pl
+    env:
+      ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
+      LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DB_PASSWORD_DEMO:       ${{ secrets.DB_PASSWORD_DEMO }}
+      KC_ADMIN_PASSWORD_DEMO: ${{ secrets.KC_ADMIN_PASSWORD_DEMO }}
+      CF_TUNNEL_TOKEN_DEMO:   ${{ secrets.CF_TUNNEL_TOKEN_DEMO }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy frontend demo
+        run: |
+          ansible-playbook -i inventory.local.yml playbooks/apps/frontend.yml -l demo \
+            -e "frontend_digest=${{ github.event.client_payload.digest }}" \
+            -e "frontend_commit=${{ github.event.client_payload.commit }}"
+
+      - name: Job summary
+        if: success()
+        run: |
+          echo "## Deploy frontend — demo" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Digest** | \`${{ github.event.client_payload.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.event.client_payload.commit }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **URL** | https://demo.reachsky.pl |" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-frontend-prod:
+    name: Deploy frontend — prod
+    needs: deploy-frontend-demo
+    if: needs.deploy-frontend-demo.result == 'success'
+    runs-on: [self-hosted, reachsky]
+    environment:
+      name: production
+      url: https://reachsky.pl
+    env:
+      ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
+      LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DB_PASSWORD_PROD:       ${{ secrets.DB_PASSWORD_PROD }}
+      KC_ADMIN_PASSWORD_PROD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
+      CF_TUNNEL_TOKEN_PROD:   ${{ secrets.CF_TUNNEL_TOKEN_PROD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy frontend prod
+        run: |
+          ansible-playbook -i inventory.local.yml playbooks/apps/frontend.yml -l prod \
+            -e "frontend_digest=${{ github.event.client_payload.digest }}" \
+            -e "frontend_commit=${{ github.event.client_payload.commit }}"
+
+      - name: Job summary
+        if: success()
+        run: |
+          echo "## Deploy frontend — prod" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Digest** | \`${{ github.event.client_payload.digest }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Commit** | \`${{ github.event.client_payload.commit }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **URL** | https://reachsky.pl |" >> "$GITHUB_STEP_SUMMARY"

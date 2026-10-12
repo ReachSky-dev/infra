@@ -1,0 +1,104 @@
+# Generowany przez Ansible — nie edytuj ręcznie na serwerze.
+# Źródło: roles/infra/templates/docker-compose.yml.j2
+# Regeneruj: ansible-playbook -i inventory.local.yml playbooks/infra.yml -l {{ env_name }}
+#
+# Środowisko: {{ env_name }}
+# Sieć {{ internal_network_name }} jest współdzielona z serwisami aplikacyjnymi
+# (backend, frontend) — muszą definiować ją jako external: true.
+
+services:
+
+  # ── Baza danych ──────────────────────────────────────────────────────────────
+  # Jeden PostgreSQL obsługuje dwie bazy: reachsky i keycloak.
+  # Baza keycloak tworzona przez init/01-keycloak-db.sql przy pierwszym starcie.
+  postgres:
+    image: postgres:17
+    container_name: "reachsky-{{ env_name }}-postgres"
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB:       reachsky
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d reachsky"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      internal:
+        aliases:
+          - postgres   # stały alias — serwisy aplikacyjne łączą się przez to DNS
+    deploy:
+      resources:
+        limits:
+          memory: {{ mem_postgres }}
+
+  # ── Keycloak ─────────────────────────────────────────────────────────────────
+  # Tryb start (nie start-dev). Realm importowany z ./keycloak/realm.json
+  # przy pierwszym starcie — --import-realm pomija import, jeśli realm istnieje.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0.7
+    container_name: "reachsky-{{ env_name }}-keycloak"
+    restart: unless-stopped
+    command: ["start", "--import-realm"]
+    environment:
+      KC_DB:                   postgres
+      KC_DB_URL:               jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME:          ${DB_USERNAME}
+      KC_DB_PASSWORD:          ${DB_PASSWORD}
+      KC_HOSTNAME:             {{ url_auth }}
+      KC_HTTP_ENABLED:         "true"
+      KC_PROXY_HEADERS:        xforwarded
+      KC_HEALTH_ENABLED:       "true"
+      KEYCLOAK_ADMIN:          admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+    volumes:
+      - ./keycloak:/opt/keycloak/data/import:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Port 9000 = management interface. start_period 120s — migracje + import realmu.
+      test: ["CMD-SHELL", "curl -fs http://localhost:9000/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+    networks:
+      internal:
+        aliases:
+          - keycloak   # stały alias dla serwisów aplikacyjnych
+    deploy:
+      resources:
+        limits:
+          memory: {{ mem_keycloak }}
+
+  # ── Cloudflare Tunnel ─────────────────────────────────────────────────────────
+  # Jedyne wyjście na świat — połączenie outbound do Cloudflare.
+  # Żaden serwis nie ma sekcji ports:.
+  cloudflared:
+    image: cloudflare/cloudflared:2024.10.0
+    container_name: "reachsky-{{ env_name }}-cloudflared"
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: {{ mem_cloudflared }}
+
+networks:
+  internal:
+    name: "{{ internal_network_name }}"
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: "reachsky-{{ env_name }}-postgres-data"
