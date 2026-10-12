@@ -9,15 +9,18 @@
 #   ansible-playbook -i inventory.local.yml playbooks/runner.yml \
 #     -e "runner_token=<jednorazowy-token>"
 #
+#   # Przypięcie konkretnej wersji (gdy "latest" coś zepsuje):
+#   ansible-playbook -i inventory.local.yml playbooks/runner.yml \
+#     -e "runner_token=<TOKEN>" -e "runner_version=2.329.0"
+#
 # Token: GitHub → repo infra → Settings → Actions → Runners → New self-hosted runner
 #         → Linux → skopiuj wartość po --token z wyświetlonej komendy
 # Token wygasa po 1h lub po pierwszym użyciu. NIE wstawiaj do vault ani kodu.
 
 - name: ReachSky — GitHub Actions self-hosted runner
-  hosts: all
+  hosts: runner          # jawna grupa — jeden runner na serwer fizyczny
   become: true
-  gather_facts: true
-  run_once: true
+  gather_facts: true     # potrzebne dla ansible_hostname w runner_name
 
   vars:
     runner_user:    github-runner
@@ -26,7 +29,9 @@
     runner_dir:     /home/github-runner/actions-runner
     runner_name:    "reachsky-{{ ansible_hostname }}"
     runner_labels:  "self-hosted,linux,reachsky"
-    runner_version: "2.321.0"
+    # Domyślnie pobiera najnowszą wersję z GitHub API.
+    # Aby przypiąć konkretną: -e "runner_version=2.329.0"
+    runner_version: "latest"
     github_repo_url: "{{ _github_repo_url | default('https://github.com/ReachSky-dev/infra') }}"
 
   tasks:
@@ -41,11 +46,35 @@
             Runners → New self-hosted runner → Linux → skopiuj wartość po --token
       when: runner_token is not defined or runner_token | length == 0
 
+    # ── Wersja runnera ────────────────────────────────────────────────────────
+    - name: Pobierz najnowszą wersję runnera z GitHub API
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/actions/runner/releases/latest
+        return_content: true
+        headers:
+          Accept: application/vnd.github+json
+      register: _latest_release
+      changed_when: false
+      when: runner_version == 'latest'
+
+    - name: Ustaw docelową wersję runnera
+      ansible.builtin.set_fact:
+        _resolved_version: >-
+          {{ (_latest_release.json.tag_name | regex_replace('^v', ''))
+             if runner_version == 'latest'
+             else runner_version }}
+
+    - name: Pokaż wersję runnera do instalacji
+      ansible.builtin.debug:
+        msg: "runner_version={{ _resolved_version }}{{ ' (z GitHub API)' if runner_version == 'latest' else ' (przypięta)' }}"
+
+    # ── Zależności systemowe ──────────────────────────────────────────────────
     - name: Zainstaluj zależności runnera
       ansible.builtin.package:
         name: [curl, tar, git]
         state: present
 
+    # ── Użytkownik runnera ────────────────────────────────────────────────────
     - name: Utwórz grupę runnera
       ansible.builtin.group:
         name: "{{ runner_group }}"
@@ -61,8 +90,8 @@
         state: present
 
     # NOPASSWD: ALL wymagane przez Ansible become: true (generuje skrypty w /tmp).
-    # Vault password nigdy nie leży trwale na dysku — zapisywany przez CI job
-    # i kasowany z if: always() po każdym jobie.
+    # Sekrety nigdy nie leżą trwale na dysku — przekazywane przez env: w CI,
+    # source /opt/reachsky/.deploy-env przy ręcznych uruchomieniach.
     - name: Uprawnienia sudo dla runnera (ansible become)
       ansible.builtin.copy:
         content: |
@@ -74,6 +103,7 @@
         mode: "0440"
         validate: "visudo -cf %s"
 
+    # ── Pobierz i zweryfikuj archiwum ─────────────────────────────────────────
     - name: Sprawdź czy runner już pobrany
       ansible.builtin.stat:
         path: "{{ runner_dir }}/run.sh"
@@ -87,29 +117,49 @@
         group: "{{ runner_group }}"
         mode: "0750"
 
-    - name: Pobierz archiwum runnera
+    - name: Pobierz plik SHA-256 z GitHub Releases
+      ansible.builtin.uri:
+        url: >-
+          https://github.com/actions/runner/releases/download/v{{ _resolved_version }}/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz.sha256
+        return_content: true
+      register: _sha256_file
+      changed_when: false
+      when: not _runner_bin.stat.exists
+
+    - name: Wyodrębnij sumę SHA-256
+      ansible.builtin.set_fact:
+        # Plik zawiera "<hash>  <filename>" — bierzemy pierwsze pole
+        _sha256: "{{ _sha256_file.content.split()[0] }}"
+      when: not _runner_bin.stat.exists
+
+    - name: Pobierz archiwum runnera (z weryfikacją sumy SHA-256)
       ansible.builtin.get_url:
         url: >-
-          https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz
-        dest: "/tmp/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+          https://github.com/actions/runner/releases/download/v{{ _resolved_version }}/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz
+        dest: "/tmp/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz"
+        checksum: "sha256:{{ _sha256 }}"
         mode: "0644"
       when: not _runner_bin.stat.exists
 
     - name: Wypakuj archiwum runnera
       ansible.builtin.unarchive:
-        src: "/tmp/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        src: "/tmp/actions-runner-linux-x64-{{ _resolved_version }}.tar.gz"
         dest: "{{ runner_dir }}"
         owner: "{{ runner_user }}"
         group: "{{ runner_group }}"
         remote_src: true
       when: not _runner_bin.stat.exists
 
+    # ── Rejestracja runnera ───────────────────────────────────────────────────
     - name: Sprawdź czy runner już zarejestrowany
       ansible.builtin.stat:
         path: "{{ runner_dir }}/.runner"
       register: _runner_cfg
 
-    # no_log: true — token jest w argv, nie może trafić do logów
+    # no_log: true chroni --token w argv przed pojawieniem się w logach.
+    # Nie ukrywa stdout/stderr config.sh — te trafiają do _reg_result
+    # i są wyświetlane w kolejnym kroku (token nie pojawia się w outputcie config.sh).
+    # failed_when: false — błąd obsługujemy ręcznie, żeby zawsze widzieć output.
     - name: Zarejestruj runnera w GitHub
       ansible.builtin.command:
         argv:
@@ -127,13 +177,31 @@
       become_user: "{{ runner_user }}"
       become: true
       when: not _runner_cfg.stat.exists
-      no_log: true
+      no_log: true          # chroni --token w argv
+      register: _reg_result
+      failed_when: false    # błąd obsługujemy poniżej — żeby zawsze widzieć output
+
+    - name: Pokaż output config.sh (token nie pojawia się w stdout/stderr)
+      ansible.builtin.debug:
+        msg: "{{ (_reg_result.stdout_lines | default([])) + (_reg_result.stderr_lines | default([])) }}"
+      when: not _runner_cfg.stat.exists
+
+    - name: Fail jeśli rejestracja nie powiodła się
+      ansible.builtin.fail:
+        msg: >
+          Rejestracja runnera nie powiodła się (rc={{ _reg_result.rc }}).
+          Sprawdź output powyżej. Najczęstsze przyczyny:
+          - token wygasł (ważny 1h od wygenerowania)
+          - runner o nazwie "{{ runner_name }}" już istnieje w GitHub
+            (GitHub → repo → Settings → Actions → Runners → usuń stary)
+      when: not _runner_cfg.stat.exists and _reg_result.rc != 0
 
     - name: Rejestracja powiodła się
       ansible.builtin.debug:
-        msg: "Runner {{ runner_name }} zarejestrowany (lub już był). Etykiety: {{ runner_labels }}"
-      when: not _runner_cfg.stat.exists
+        msg: "Runner {{ runner_name }} zarejestrowany. Etykiety: {{ runner_labels }}"
+      when: not _runner_cfg.stat.exists and _reg_result.rc == 0
 
+    # ── Usługa systemd ────────────────────────────────────────────────────────
     - name: Sprawdź czy usługa systemd już zainstalowana
       ansible.builtin.shell:
         cmd: "systemctl list-unit-files 'actions.runner.*' --no-legend | awk '{print $1}' | head -1"
@@ -161,6 +229,7 @@
         daemon_reload: true
       when: _svc_name.stdout | length > 0
 
+    # ── Wynik ─────────────────────────────────────────────────────────────────
     - name: Status runnera
       ansible.builtin.command:
         cmd: "{{ runner_dir }}/svc.sh status"
@@ -173,6 +242,7 @@
       ansible.builtin.debug:
         msg:
           - "Nazwa:    {{ runner_name }}"
+          - "Wersja:   {{ _resolved_version }}"
           - "Etykiety: {{ runner_labels }}"
           - "Repo:     {{ github_repo_url }}"
           - "{{ _runner_status.stdout_lines | default(['(brak statusu)']) }}"

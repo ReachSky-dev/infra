@@ -1,6 +1,6 @@
 ---
 # inventory.yml — uruchomienie zdalne (z laptopa przez SSH).
-# ansible_host pochodzi z group_vars/{env}/vault.yml — nie trafia do repo.
+# ansible_host pochodzi z group_vars/all/vars.yml (lookup env ANSIBLE_HOST).
 
 all:
   children:
@@ -10,3 +10,7 @@ all:
     demo:
       hosts:
         reachsky-demo: {}
+    # Jeden runner na serwer fizyczny — runner.yml używa tej grupy.
+    runner:
+      hosts:
+        reachsky-prod: {}
