@@ -72,12 +72,11 @@ services:
         condition: service_healthy
     healthcheck:
       # Obraz Keycloaka nie ma curl ani wget — sondujemy port zarządzania przez /dev/tcp basha.
-      # CMD-SHELL używa /bin/sh, gdzie /dev/tcp może nie działać — stąd jawne /bin/bash.
       test:
         - CMD
         - /bin/bash
         - -c
-        - exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q UP <&3
+        - 'exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e "GET /health/ready HTTP/1.0\r\n\r\n" >&3 && grep -q UP <&3'
       interval: 15s
       timeout: 5s
       retries: 10

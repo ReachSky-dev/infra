@@ -33,6 +33,20 @@
     group: "{{ app_group }}"
     mode: "0600"
 
+# Walidacja po wygenerowaniu obu plików — błąd składni YAML ujawnia się tu,
+# nie dopiero przy docker compose pull/up.
+- name: Zwaliduj wygenerowany docker-compose.yml
+  ansible.builtin.command:
+    cmd: >
+      docker compose
+      --project-name {{ infra_project }}
+      --env-file {{ infra_dir }}/.env
+      -f {{ infra_dir }}/docker-compose.yml
+      config -q
+  register: _compose_validate
+  changed_when: false
+  failed_when: _compose_validate.rc != 0
+
 - name: Utwórz sieć środowiskową {{ internal_network_name }}
   community.docker.docker_network:
     name: "{{ internal_network_name }}"
