@@ -71,14 +71,13 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      # Obraz Keycloaka nie zawiera curl/wget — sondujemy przez /dev/tcp basha.
-      # Port 9000 = management interface (KC_HEALTH_ENABLED).
+      # Obraz Keycloaka nie ma curl ani wget — sondujemy port zarządzania przez /dev/tcp basha.
+      # CMD-SHELL używa /bin/sh, gdzie /dev/tcp może nie działać — stąd jawne /bin/bash.
       test:
-        - CMD-SHELL
-        - >-
-          exec 3<>/dev/tcp/127.0.0.1/9000 &&
-          printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
-          grep -q '"status": "UP"' <&3
+        - CMD
+        - /bin/bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q UP <&3
       interval: 15s
       timeout: 5s
       retries: 10
