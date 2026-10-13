@@ -9,10 +9,9 @@ on:
 permissions:
   contents: read
 
-# Jeden aktywny deploy danego serwisu naraz — kolejne czekają, nie są anulowane.
-concurrency:
-  group: "deploy-${{ github.event.action }}"
-  cancel-in-progress: false
+# Concurrency zdefiniowane per job (serwis + środowisko) — demo i prod nie blokują się nawzajem.
+# Demo: cancel-in-progress: true — przy szybkich pushach wdrażamy tylko ostatni digest.
+# Prod: cancel-in-progress: false — każde zatwierdzenie musi zakończyć deploy do końca.
 
 jobs:
 
@@ -23,6 +22,9 @@ jobs:
   deploy-backend-demo:
     name: Deploy backend — demo
     if: github.event.action == 'deploy-backend'
+    concurrency:
+      group: deploy-backend-demo
+      cancel-in-progress: true
     runs-on: [self-hosted, reachsky]
     environment:
       name: demo
@@ -62,6 +64,9 @@ jobs:
     # Przy niepowodzeniu demo: job jest skipped — środowisko production
     # nigdy nie pokaże okna akceptacji.
     if: needs.deploy-backend-demo.result == 'success'
+    concurrency:
+      group: deploy-backend-prod
+      cancel-in-progress: false
     runs-on: [self-hosted, reachsky]
     environment:
       name: production
@@ -101,6 +106,9 @@ jobs:
   deploy-frontend-demo:
     name: Deploy frontend — demo
     if: github.event.action == 'deploy-frontend'
+    concurrency:
+      group: deploy-frontend-demo
+      cancel-in-progress: true
     runs-on: [self-hosted, reachsky]
     environment:
       name: demo
@@ -137,6 +145,9 @@ jobs:
     name: Deploy frontend — prod
     needs: deploy-frontend-demo
     if: needs.deploy-frontend-demo.result == 'success'
+    concurrency:
+      group: deploy-frontend-prod
+      cancel-in-progress: false
     runs-on: [self-hosted, reachsky]
     environment:
       name: production
