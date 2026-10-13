@@ -6,6 +6,8 @@
 # Sieć {{ internal_network_name }} jest współdzielona z serwisami aplikacyjnymi
 # (backend, frontend) — muszą definiować ją jako external: true.
 
+name: "{{ infra_project }}"
+
 services:
 
   # ── Baza danych ──────────────────────────────────────────────────────────────
@@ -97,7 +99,7 @@ services:
 networks:
   internal:
     name: "{{ internal_network_name }}"
-    driver: bridge
+    external: true   # tworzona przez rolę infra — docker_network przed compose up
 
 volumes:
   postgres_data:
