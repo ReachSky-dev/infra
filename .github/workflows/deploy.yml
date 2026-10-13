@@ -30,6 +30,7 @@ jobs:
     env:
       ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
       LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DOCKERHUB_USERNAME:     ${{ vars.DOCKERHUB_USERNAME }}
       DB_PASSWORD_DEMO:       ${{ secrets.DB_PASSWORD_DEMO }}
       KC_ADMIN_PASSWORD_DEMO: ${{ secrets.KC_ADMIN_PASSWORD_DEMO }}
       CF_TUNNEL_TOKEN_DEMO:   ${{ secrets.CF_TUNNEL_TOKEN_DEMO }}
@@ -68,6 +69,7 @@ jobs:
     env:
       ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
       LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DOCKERHUB_USERNAME:     ${{ vars.DOCKERHUB_USERNAME }}
       DB_PASSWORD_PROD:       ${{ secrets.DB_PASSWORD_PROD }}
       KC_ADMIN_PASSWORD_PROD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
       CF_TUNNEL_TOKEN_PROD:   ${{ secrets.CF_TUNNEL_TOKEN_PROD }}
@@ -106,6 +108,7 @@ jobs:
     env:
       ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
       LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DOCKERHUB_USERNAME:     ${{ vars.DOCKERHUB_USERNAME }}
       DB_PASSWORD_DEMO:       ${{ secrets.DB_PASSWORD_DEMO }}
       KC_ADMIN_PASSWORD_DEMO: ${{ secrets.KC_ADMIN_PASSWORD_DEMO }}
       CF_TUNNEL_TOKEN_DEMO:   ${{ secrets.CF_TUNNEL_TOKEN_DEMO }}
@@ -141,6 +144,7 @@ jobs:
     env:
       ANSIBLE_HOST:           ${{ secrets.ANSIBLE_HOST }}
       LOCAL_NETWORK_CIDR:     ${{ secrets.LOCAL_NETWORK_CIDR }}
+      DOCKERHUB_USERNAME:     ${{ vars.DOCKERHUB_USERNAME }}
       DB_PASSWORD_PROD:       ${{ secrets.DB_PASSWORD_PROD }}
       KC_ADMIN_PASSWORD_PROD: ${{ secrets.KC_ADMIN_PASSWORD_PROD }}
       CF_TUNNEL_TOKEN_PROD:   ${{ secrets.CF_TUNNEL_TOKEN_PROD }}

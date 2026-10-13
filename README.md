@@ -69,6 +69,7 @@ sudo tee /opt/reachsky/.deploy-env > /dev/null << 'EOF'
 # Odpowiedniki GitHub Secrets dla ręcznych uruchomień.
 ANSIBLE_HOST=192.168.0.X          # IP serwera w sieci lokalnej
 LOCAL_NETWORK_CIDR=192.168.0.0/24 # CIDR sieci lokalnej (reguła SSH w UFW)
+DOCKERHUB_USERNAME=rafals57        # konto Docker Hub
 DB_PASSWORD_PROD=                 # silne hasło PostgreSQL dla prod
 DB_PASSWORD_DEMO=                 # silne hasło PostgreSQL dla demo (inne niż prod)
 KC_ADMIN_PASSWORD_PROD=           # hasło panelu /admin Keycloaka (prod)
@@ -243,3 +244,21 @@ Settings → Environments:
 6. GitHub Settings → Environments → utwórz `staging`.
 7. `.github/workflows/deploy.yml` — dodaj joby `deploy-*-staging`.
 8. `.github/workflows/rollback.yml` — dodaj `staging` do listy `options`.
+
+---
+
+## Pitfalls
+
+- W katalogu środowiska zawsze podawaj `-f docker-compose.infra.yml`;
+  goły `docker compose` nie jest tu poprawny — może trafić w nieaktualny plik z poprzedniej iteracji.
+- Pliki montowane read-only do kontenerów muszą być czytelne dla uid procesu w kontenerze
+  (np. postgres uid 999), nie tylko dla roota — katalogi `init/` oraz pliki `.sql`
+  potrzebują `mode: 0755/0644`, nie `0750/0640`.
+
+---
+
+## Stan przejściowy
+
+Bez pliku `keycloak/realm.json` Keycloak startuje bez importu —
+konfiguracja realmu wymaga ręcznej konfiguracji przez konsolę administracyjną
+pod adresem `{url_auth}/admin` (login i hasło z `KC_ADMIN_PASSWORD_{ENV}`).

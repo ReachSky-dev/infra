@@ -4,6 +4,26 @@
 # Tworzy sieć {{ internal_network_name }}, na której działają serwisy aplikacyjne.
 # Idempotentna — kolejne uruchomienia nie restartują działających kontenerów.
 
+# Rola renderuje wyłącznie docker-compose.infra.yml — obecność starego docker-compose.yml
+# powoduje, że ręczne docker compose bez -f trafia w nieaktualną konfigurację.
+- name: Usuń stary docker-compose.yml (jeśli istnieje)
+  ansible.builtin.file:
+    path: "{{ infra_dir }}/docker-compose.yml"
+    state: absent
+
+- name: Sprawdź czy realm.json Keycloaka istnieje na hoście
+  ansible.builtin.stat:
+    path: "{{ infra_dir }}/keycloak/realm.json"
+  register: _kc_realm
+
+- name: Utwórz katalog importu Keycloaka (zawsze, nawet pusty)
+  ansible.builtin.file:
+    path: "{{ infra_dir }}/keycloak"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0755"
+
 - name: Wygeneruj docker-compose.infra.yml
   ansible.builtin.template:
     src: docker-compose.yml.j2
@@ -33,7 +53,7 @@
       --project-name {{ infra_project }}
       --env-file {{ infra_dir }}/.env
       -f {{ infra_dir }}/docker-compose.yml
-      pull
+      pull postgres keycloak cloudflared
   changed_when: true
 
 - name: docker compose up -d (infra)
@@ -43,7 +63,7 @@
       --project-name {{ infra_project }}
       --env-file {{ infra_dir }}/.env
       -f {{ infra_dir }}/docker-compose.yml
-      up -d
+      up -d postgres keycloak cloudflared
   changed_when: true
 
 - name: Czekaj na postgres healthy

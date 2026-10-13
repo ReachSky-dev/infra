@@ -21,7 +21,13 @@ frontend_project: "reachsky-{{ env_name }}-frontend"
 db_username: "reachsky_{{ env_name }}"
 
 # ── Docker Hub ────────────────────────────────────────────────────────────────
-dockerhub_username: rafals57
+# W CI: GitHub Variable DOCKERHUB_USERNAME. Lokalnie: source /opt/reachsky/.deploy-env
+dockerhub_username: >-
+  {{ lookup('env', 'DOCKERHUB_USERNAME')
+     | default(undef(), true)
+     | mandatory('DOCKERHUB_USERNAME nie jest ustawiony') }}
+backend_image_repo:  "{{ dockerhub_username }}/reachsky-backend"
+frontend_image_repo: "{{ dockerhub_username }}/reachsky-frontend"
 
 # ── OIDC ──────────────────────────────────────────────────────────────────────
 oidc_client_id: reachsky-frontend

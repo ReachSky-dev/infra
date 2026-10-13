@@ -2,7 +2,7 @@
 # Źródło: roles/apps/frontend/templates/docker-compose.yml.j2
 #
 # Środowisko: {{ env_name }}
-# Obraz:      {{ dockerhub_username }}/reachsky-frontend@{{ frontend_digest }}
+# Obraz:      {{ frontend_image_repo }}@{{ frontend_digest }}
 # Sieć {{ internal_network_name }} tworzona przez rolę infra — external: true.
 
 services:
