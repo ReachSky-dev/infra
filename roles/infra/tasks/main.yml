@@ -4,13 +4,6 @@
 # Tworzy sieć {{ internal_network_name }}, na której działają serwisy aplikacyjne.
 # Idempotentna — kolejne uruchomienia nie restartują działających kontenerów.
 
-# Rola renderuje wyłącznie docker-compose.infra.yml — obecność starego docker-compose.yml
-# powoduje, że ręczne docker compose bez -f trafia w nieaktualną konfigurację.
-- name: Usuń stary docker-compose.yml (jeśli istnieje)
-  ansible.builtin.file:
-    path: "{{ infra_dir }}/docker-compose.yml"
-    state: absent
-
 - name: Sprawdź czy realm.json Keycloaka istnieje na hoście
   ansible.builtin.stat:
     path: "{{ infra_dir }}/keycloak/realm.json"
@@ -24,7 +17,7 @@
     group: "{{ app_group }}"
     mode: "0755"
 
-- name: Wygeneruj docker-compose.infra.yml
+- name: Wygeneruj docker-compose.yml (infra)
   ansible.builtin.template:
     src: docker-compose.yml.j2
     dest: "{{ infra_dir }}/docker-compose.yml"
