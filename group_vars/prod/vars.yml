@@ -29,6 +29,9 @@ mem_cloudflared: "64m"
 # ── JVM ───────────────────────────────────────────────────────────────────────
 jvm_max_ram_pct: 75.0
 
+# ── Dane testowe ──────────────────────────────────────────────────────────────
+seed_demo_data: "false"
+
 # ── Sekrety prod (ze zmiennych środowiskowych) ────────────────────────────────
 db_password: >-
   {{ lookup('env', 'DB_PASSWORD_PROD')

@@ -259,6 +259,9 @@ Settings → Environments:
   (np. postgres uid 999), nie tylko dla roota — katalogi `init/` oraz pliki `.sql`
   potrzebują `mode: 0755/0644`, nie `0750/0640`.
 
+- `SEED_DEMO_DATA=true` tylko dla demo (`group_vars/demo/vars.yml`) — prod nigdy nie jest seedowany
+  (`group_vars/prod/vars.yml`: `false`); zmiana wartości w złym pliku może nadpisać dane produkcyjne.
+
 ---
 
 ## Stan przejściowy
