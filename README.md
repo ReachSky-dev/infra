@@ -254,7 +254,9 @@ Settings → Environments:
   więc stary klon cicho nadpisuje wdrożoną konfigurację starą wersją.
 - Obraz Keycloaka (UBI9-minimal) nie ma `curl` ani `wget` — healthcheck musi sondować przez `/dev/tcp`
   z jawnym `/bin/bash` (`CMD-SHELL` używa `/bin/sh`, gdzie `/dev/tcp` może nie działać).
-- `apiUrl` musi zawierać prefiks kontekstu backendu (`/api`) — sam host daje 404 na każdym endpoincie.
+- Front woła API przez własny origin (`API_URL=/api`), nie przez subdomenę — eliminuje CORS bez zmian
+  w backendzie; `demo-api.reachsky.pl` zostaje do bezpośredniego dostępu i Swaggera.
+  `OIDC_AUTHORITY` musi pozostać pełnym adresem — przepływ OIDC jest oparty na przekierowaniach.
 - Pliki montowane read-only do kontenerów muszą być czytelne dla uid procesu w kontenerze
   (np. postgres uid 999), nie tylko dla roota — katalogi `init/` oraz pliki `.sql`
   potrzebują `mode: 0755/0644`, nie `0750/0640`.
