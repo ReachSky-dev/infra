@@ -49,21 +49,21 @@
         state: directory
         owner: "{{ app_user }}"
         group: "{{ app_group }}"
-        mode: "0750"
+        mode: "0755"
 
     - name: Utwórz podkatalogi (infra, backend, frontend)
       ansible.builtin.file:
-        path: "{{ deploy_dir }}/{{ item }}"
+        path: "{{ deploy_dir }}/{{ item.path }}"
         state: directory
         owner: "{{ app_user }}"
         group: "{{ app_group }}"
-        mode: "0750"
+        mode: "{{ item.mode }}"
       loop:
-        - infra
-        - infra/init
-        - infra/keycloak
-        - backend
-        - frontend
+        - { path: infra,          mode: "0750" }
+        - { path: infra/init,     mode: "0755" }
+        - { path: infra/keycloak, mode: "0750" }
+        - { path: backend,        mode: "0750" }
+        - { path: frontend,       mode: "0750" }
 
     # ── Pliki statyczne ───────────────────────────────────────────────────────
     - name: Skopiuj skrypty init SQL
@@ -72,7 +72,7 @@
         dest: "{{ infra_dir }}/init/"
         owner: "{{ app_user }}"
         group: "{{ app_group }}"
-        mode: "0640"
+        mode: "0644"
 
     - name: "Skopiuj realm.json (keycloak/{{ env_name }}/realm.json → jeśli istnieje)"
       ansible.builtin.copy:
