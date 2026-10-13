@@ -252,6 +252,7 @@ Settings → Environments:
 - Przed ręcznym uruchomieniem playbooka na serwerze zawsze wykonaj
   `cd /opt/reachsky-infra && git pull` — rola renderuje szablony z lokalnego klona,
   więc stary klon cicho nadpisuje wdrożoną konfigurację starą wersją.
+- Obraz Keycloaka (UBI9-minimal) nie ma `curl` ani `wget` — healthcheck musi sondować przez `/dev/tcp`.
 - Pliki montowane read-only do kontenerów muszą być czytelne dla uid procesu w kontenerze
   (np. postgres uid 999), nie tylko dla roota — katalogi `init/` oraz pliki `.sql`
   potrzebują `mode: 0755/0644`, nie `0750/0640`.
