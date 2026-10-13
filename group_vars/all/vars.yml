@@ -29,6 +29,10 @@ dockerhub_username: >-
 backend_image_repo:  "{{ dockerhub_username }}/reachsky-backend"
 frontend_image_repo: "{{ dockerhub_username }}/reachsky-frontend"
 
+# ── API ───────────────────────────────────────────────────────────────────────
+# Prefiks kontekstu backendu — front dokleja ścieżki z /, więc bez końcowego /.
+api_path_prefix: /api
+
 # ── OIDC ──────────────────────────────────────────────────────────────────────
 oidc_client_id: reachsky-frontend
 

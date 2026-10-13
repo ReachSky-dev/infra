@@ -12,7 +12,7 @@ services:
     container_name: "reachsky-{{ env_name }}-frontend"
     restart: unless-stopped
     environment:
-      API_URL:        {{ url_api }}
+      API_URL:        {{ url_api }}{{ api_path_prefix }}
       OIDC_AUTHORITY: {{ url_auth }}/realms/reachsky
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
     networks:
